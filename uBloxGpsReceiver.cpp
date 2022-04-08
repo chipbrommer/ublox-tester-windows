@@ -20,7 +20,7 @@ void uBloxGPS::interfaceTask()
 	int inBytes = 0;
 
 	// Connect
-	SerialPort m_serial(portName);
+	SerialPort m_serial("\\\\.\\COM5");
 
 	// SEND UBX::MON::VER REQUEST TO VERIFY CONNECTION ON GPS UNIT
 	requestUbxData(m_outBuffer, UBX::MON::classId, UBX::MON::VER::messageId);
@@ -73,7 +73,6 @@ bool uBloxGPS::validateNmeaChecksum(char* buffer)
 	char* checksum_str;						// char array to hold the check sum
 	int checksum;							// holds the int version of the checksum
 	unsigned char calculated_checksum = 0;	// holds the calculated checksum
-	int size = strlen(buffer);
 
 	// Checksum is postcede by *
 	checksum_str = strchr(buffer, '*');
@@ -82,7 +81,7 @@ bool uBloxGPS::validateNmeaChecksum(char* buffer)
 		// Remove checksum from string
 		*checksum_str = '\0';
 		// Calculate checksum, starting after $ (i = 1)
-		for (int i = 1; i < size; i++)
+		for (int i = 1; i < strlen(buffer); i++)
 		{
 			calculated_checksum = calculated_checksum ^ buffer[i];
 		}
@@ -1031,15 +1030,12 @@ void uBloxGPS::printMessageInHex(uint8_t* buffer, uint8_t size)
 
 void uBloxGPS::printSatelliteData(Satellite sat)
 {
-	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
-
 	printf("\tNumber ID          :%i \n", sat.numberID);							// Number ID
 	printf("\tSignal ID          :%s \n", sat.signalID.c_str());					// Signal ID
 	printf("\tType               :%s \n", sat.type.c_str());						// Type
 	printf("\tRange              :%f \n", sat.range);								// Range
-	printf("\tlatitudeInDeg           :%f %c \n", sat.latitudeInDegrees, sat.latitudeDirection);
-	printf("\tlongitudeInDeg          :%f %c \n", sat.longitudeInDegrees, sat.longitudeDirection);
+	printf("\tlatitudeInDeg      :%f %c \n", sat.latitudeInDegrees, sat.latitudeDirection);
+	printf("\tlongitudeInDeg     :%f %c \n", sat.longitudeInDegrees, sat.longitudeDirection);
 	printf("\tPosition Fix Qual  :%i \n", sat.positionFixQuality);				// Position Fix Quality
 	printf("\tElevation          :%f \n", sat.elevationInDegrees);				// Elevation
 	printf("\tAzimuth            :%f \n", sat.azimuthInDegrees);					// Azimuth
@@ -1051,9 +1047,6 @@ void uBloxGPS::printSatelliteData(Satellite sat)
 
 void uBloxGPS::printSatelliteData(UBX_SAT_DATA sat)
 {
-	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
-
 	printf("\tGNSS ID            :%i \n", sat.gnssId);
 	printf("\tSatellite ID       :%i \n", sat.satelliteId);
 	printf("\tCarr. To Noise Rat.:%i dBHz\n", sat.carrierToNoiseRatioInDbhz);
@@ -1271,10 +1264,10 @@ void uBloxGPS::printNavSatelliteData()
 
 	// print the satellite data in vector
 	int x = 1;
-	for (auto it = satellites.begin(); it != satellites.end(); ++it)
+	for (int index = 0; index < satellites.size(); index++)
 	{
 		printf("\nSATELLITE %i:\n", x);
-		printSatelliteData(*it);
+		printSatelliteData(satellites[index]);
 		x++;
 	}
 }

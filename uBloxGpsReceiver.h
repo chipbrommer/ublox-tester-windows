@@ -14,12 +14,6 @@
 #include "uBloxGpsReceiverInfo.h"
 #include "Serial.h"
 
-#if defined(__linux__) 
-const char* portName = "/dev/ttyACM0";
-#else
-const char* portName = "\\\\.\\COM5";
-#endif
-
 class uBloxGPS
 {
 

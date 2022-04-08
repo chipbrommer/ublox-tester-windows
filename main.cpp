@@ -4,12 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
-const char* portName = "\\\\.\\COM5";
-
 int main()
 {
-    // SerialPort serial(portName);
-
     unsigned char readBuffer[1024];
     unsigned char sendBuffer[8];
     int bytesInBuffer = 0;
