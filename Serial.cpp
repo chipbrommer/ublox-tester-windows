@@ -1,6 +1,11 @@
 #include "Serial.h"
 
-SerialPort::SerialPort(const char* portName)
+SerialPort::SerialPort()
+{
+    // Do Nothing
+}
+
+int SerialPort::connect(const char* portName)
 {
     this->connected = false;
 
@@ -15,11 +20,13 @@ SerialPort::SerialPort(const char* portName)
     {
         if (GetLastError() == ERROR_FILE_NOT_FOUND)
         {
-            std::cerr << "ERROR: Handle was not attached.Reason : " << portName << " not available\n";
+            std::cerr << "ERROR: Handle was not attached. Reason : " << portName << " not available\n";
         }
         else
         {
             std::cerr << "ERROR!!!\n";
+            errno = GetLastError();
+            return -1;
         }
     }
     else
@@ -50,6 +57,8 @@ SerialPort::SerialPort(const char* portName)
             }
         }
     }
+
+    return 0;
 }
 
 SerialPort::~SerialPort()
@@ -104,6 +113,11 @@ int SerialPort::writeSerialPort(const unsigned char* buffer, int buf_size)
     }
 
     return bytesSent;
+}
+
+int SerialPort::bytesAvail()
+{
+    return ClearCommError(this->handler, &this->errors, &this->status);
 }
 
 // Checking if serial port is connected

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-int main()
+void temp()
 {
     unsigned char readBuffer[1024];
     unsigned char sendBuffer[8];
@@ -33,7 +33,7 @@ int main()
     test[12] = 0x00;
     test[13] = 0x00;
     // sat 1
-    test[14] = 0x03; 
+    test[14] = 0x03;
 
     test[15] = 0x03;
 
@@ -51,7 +51,7 @@ int main()
     test[23] = 0x00;
     test[24] = 0x00;
     test[25] = 0x00;
-    
+
     // check sum
     test[26] = 0x00;
     test[27] = 0x00;
@@ -130,36 +130,36 @@ int main()
     test3[14] = 0x1A;
 
     test3[15] = 0x1A;
-        
+
     test3[16] = 0x03;
-        
+
     test3[17] = 0x03;
-        
+
     test3[18] = 0x03;
     test3[19] = 0x00;
-        
+
     test3[20] = 0x03;
     test3[21] = 0x00;
-        
+
     test3[22] = 0x00;
     test3[23] = 0x00;
     test3[24] = 0x00;
     test3[25] = 0x00;
     // s3t 2
     test3[26] = 0x1B;
-        
+
     test3[27] = 0x13;
-        
+
     test3[28] = 0x04;
-        
+
     test3[29] = 0x04;
-        
+
     test3[30] = 0x04;
     test3[31] = 0x00;
-        
+
     test3[32] = 0x04;
     test3[33] = 0x00;
-        
+
     test3[34] = 0x00;
     test3[35] = 0x00;
     test3[36] = 0x00;
@@ -172,8 +172,13 @@ int main()
     ublox.handleUbxMessage(test3);
 
     ublox.printNavSatelliteData();
+}
 
-    return 0;
+int main()
+{
+    uBloxGPS ublox;
+
+    ublox.startInterface();
 }
 
 /*

@@ -12,9 +12,13 @@
 #include <thread>
 #include <functional>
 #include "uBloxGpsReceiverInfo.h"
+#include "IGPSReceiver.h"
 #include "Serial.h"
+#include <assert.h>
 
-class uBloxGPS
+#define NUM_SYNC_BYTES 2
+
+class uBloxGPS : public IGPSReceiver
 {
 
 public:
@@ -25,7 +29,7 @@ public:
 	~uBloxGPS();
 
 	//! @brief Starts the interface on a thread to poll for data. 
-	void startInterface();
+	virtual void startInterface();
 
 	//! @brief Validates the checksum of an NMEA message
 	//! @param buffer - [in] - char array containing the NMEA message
@@ -74,17 +78,13 @@ public:
 	//! @param messageId  - [in] - messageId of the message we want to request
 	void requestUbxData(uint8_t* buffer, uint8_t classId, uint8_t messageId);
 
-	//! @brief Enables a desired message data stream from the uBlox GPS without needing to poll for it. 
-	//! @param buffer - [out] - buffer to store the message in
+	//! @brief Disables or enables a desired message data stream from the uBlox GPS
 	//! @param classId - [in] - classId of the message we want to enable
 	//! @param messageId  - [in] - messageId of the message we want to enable
-	void enableUbxMessageDataStream(uint8_t* buffer, uint8_t classId, uint8_t messageId);
-
-	//! @brief Disables a desired message data stream from the uBlox GPS to only get the data when polling for it. 
-	//! @param buffer - [out] - buffer to store the message in
-	//! @param classId - [in] - classId of the message we want to disable
-	//! @param messageId  - [in] - messageId of the message we want to disable
-	void disableUbxMessageDataStream(uint8_t* buffer, uint8_t classId, uint8_t messageId);
+	//! @param uart1 - [in] - enter 1 or 0 to disable or enable this port
+	//! @param usb - [in] - enter 1 or 0 to disable or enable this port
+	//! @return -1 on fail and errno will be set, 0 on success
+	int configureMessageDataStream(uint8_t classId, uint8_t messageId, bool uart1, bool usb);
 
 	//! @brief Converts a char array time to a string with formatting: Ex. "03:25:58"
 	//! @param time - [in] - Char array to be converted
@@ -144,6 +144,9 @@ public:
 	//! @brief Prints all data associated with the UBX::NAV::DOP message
 	void printNavDopData();
 
+	//! @brief Prints all data associated with the UBX::NAV::COV message
+	void printNavCovData();
+
 	//! @brief Prints all data associated with the UBX::NAV::POSLLH message
 	void printNavPositionLlhData();
 #pragma endregion
@@ -157,11 +160,30 @@ public:
 	//! @param navigationCycles - [in] - Desired navigation cycles rate based on desired measure rate. 
 	void setUbxMessageRate(uint8_t* buffer, uint8_t satelliteSource, uint8_t measurmentRate, uint8_t navigationRate);
 
+	// TODO - MINISTRIKE INTEGRATION
+	virtual void do_100_HzProcessing();
+	virtual void getPosition(double& latRadians, double& lonRadians, double& haeMeters);
+	virtual void getUncertainties(double& latStdDevMeters, double& lonStdDevMeters, double& altStdDevMeters);
+	virtual double getUndulationMeters();
+	virtual void getVelocity(double& northMetersPerSec, double& eastMetersPerSec, double& downMetesPerSec);
+	virtual void getGPSTimeOfDataValidity(unsigned short& week, double& secondsOfWeek);
+	virtual unsigned int getLeapSeconds();
+	virtual bool isSolutionValid();
+	virtual bool positionUpdateOccured();
+	virtual void clearPositionUpdateOccured();
+	virtual bool velocityUpdateOccured();
+	virtual void clearVelocityUpdateOccured();
+	virtual void getFOMs(unsigned short& fom, unsigned short& tfom);
+	virtual bool newPVTAvailable();
+	virtual void clearNewPVTAvailable();
+
 protected:
 	//! @brief entry point for the thread that polls for data
 	virtual void interfaceTask();
-	std::unique_ptr<std::thread>    m_thread;       //!< the thread that polls for new data to the gps receiver
+	std::thread* Thread;
+	//std::unique_ptr<std::thread>    m_thread;       //!< the thread that polls for new data to the gps receiver
 	std::mutex                      m_mutex;
+	SerialPort m_serial;
 
 private:
 	unsigned char m_inBuffer[1024];
@@ -247,7 +269,7 @@ private:
 	/*
 	*	UBX MESSAGES - DO WE WANT TO STORE HERE INSTEAD ?
 	*/
-	// UBX_MON_VER monitorVersion;
+	 UBX_MON_VER monitorVersion;
 	// UBX_NAV_DOP dilutionOfPrecisionData;
 	// UBX_NAV_SAT satelliteData;
 	// UBX_NAV_STATUS navigationStatusData;
@@ -282,6 +304,7 @@ private:
 	uint8_t navFlags2 = 0;
 	uint8_t flags = 0;
 	uint8_t flags2 = 0;
+	uint8_t covFlags = 0;
 	uint8_t numSatellitesUsed = 0;
 
 	int32_t longitudeInDeg = 0;
@@ -323,6 +346,20 @@ private:
 	uint8_t numberSatellites = 0;
 	uint32_t timeToFirstFixInMilliseconds = 0;
 	uint32_t milliSecondsSinceStartup = 0;
+	uint8_t posCovValid = 0;
+	int32_t posCovNNInMsquared = 0;
+	int32_t posCovNEInMsquared = 0;
+	int32_t posCovNDInMsquared = 0;
+	int32_t posCovEEInMsquared = 0;
+	int32_t posCovEDInMsquared = 0;
+	int32_t posCovDDInMsquared = 0;
+	uint8_t velCovValid = 0;
+	int32_t velCovNNInMSsquared = 0;
+	int32_t velCovNEInMSsquared = 0;
+	int32_t velCovNDInMSsquared = 0;
+	int32_t velCovEEInMSsquared = 0;
+	int32_t velCovEDInMSsquared = 0;
+	int32_t velCovDDInMSsquared = 0;
 	std::vector<UBX_SAT_DATA> satellites;
 
 	/*
@@ -346,6 +383,12 @@ private:
 	/*
 	*	FUNCTION PROTOTYPES
 	*/
+
+	//! @brief Configures the ublox device to our desired configuration. 
+	//! This must be done each time on start up as we will not save the config
+	//! so the ublox stays in default. 
+	int configureDevice();
+
 	//! @brief Converts a single hex char to an integer.
 	//! @param c - [in] - the character to be converted
 	//! @return the int value of the converted char
@@ -355,6 +398,12 @@ private:
 	//! @param c - [in] - The array to be converted  
 	//! @return the int value of the array. 
 	int hexToInt(char* c);
+
+	//! @brief Combines two uint8_t ints into a uint16_t
+	//! @param uint1 - int 1 to be combined
+	//! @param uint2 - int 2 to be combined
+	//! @return uint16_t combination of the two. 
+	uint16_t combineTwo8bitUIntsTo16bitUInt(uint8_t int1, uint8_t int2);
 
 	//! @brief Gets the Signal ID of an NMEA message
 	//! @param buffer - [in] - the buffer containing the NMEA message 
@@ -494,6 +543,11 @@ private:
 	//! @brief Parses a UBX::NAV::DOP message to the appropriate variables.
 	//! @param buffer - [in] - buffer to be parsed. 
 	void parseNavDopData(uint8_t* buffer);
+
+	//! @brief Parses a UBX::NAV::COV message to the appropriate variables.
+	//! the data comes across in little endian and gets converted to decimal
+	//! @param buffer - [in] - buffer to be parsed. 
+	void parseNavCovData(uint8_t* buffer);
 
 	//! @brief Gets a bit of a unsigned char / uint8_t at a specified element location
 	//! @param data - [in] - int to get a bit from

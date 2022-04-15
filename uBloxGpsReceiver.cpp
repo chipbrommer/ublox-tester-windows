@@ -12,29 +12,353 @@ uBloxGPS::~uBloxGPS()
 
 void uBloxGPS::startInterface()
 {
-	m_thread.reset(new std::thread(std::bind(&uBloxGPS::interfaceTask, this)));
+	//m_thread.reset(new std::thread(std::bind(&uBloxGPS::interfaceTask, this)));
+	Thread = new std::thread{ &uBloxGPS::interfaceTask, this };
+
+	interfaceTask();
+}
+
+void uBloxGPS::do_100_HzProcessing()
+{
+	// TODO
+}
+void uBloxGPS::getPosition(double& latRadians, double& lonRadians, double& haeMeters)
+{
+	// TODO
+}
+void uBloxGPS::getUncertainties(double& latStdDevMeters, double& lonStdDevMeters, double& altStdDevMeters)
+{
+	// TODO
+}
+double uBloxGPS::getUndulationMeters()
+{
+	// TODO
+	return 1;
+}
+void uBloxGPS::getVelocity(double& northMetersPerSec, double& eastMetersPerSec, double& downMetesPerSec)
+{
+	// TODO
+}
+void uBloxGPS::getGPSTimeOfDataValidity(unsigned short& week, double& secondsOfWeek)
+{
+	// TODO
+}
+unsigned int uBloxGPS::getLeapSeconds()
+{
+	// TODO
+	return 1;
+}
+bool uBloxGPS::isSolutionValid()
+{
+	// TODO
+	return 1;
+}
+bool uBloxGPS::positionUpdateOccured()
+{
+	// TODO
+	return 1;
+}
+void uBloxGPS::clearPositionUpdateOccured()
+{
+	// TODO
+}
+bool uBloxGPS::velocityUpdateOccured()
+{
+	// TODO
+	return 1;
+}
+void uBloxGPS::clearVelocityUpdateOccured()
+{
+	// TODO
+}
+void uBloxGPS::getFOMs(unsigned short& fom, unsigned short& tfom)
+{
+	// TODO
+}
+bool uBloxGPS::newPVTAvailable()
+{
+	// TODO
+	return 1;
+}
+void uBloxGPS::clearNewPVTAvailable()
+{
+	// TODO
 }
 
 void uBloxGPS::interfaceTask()
 {
-	int inBytes = 0;
+
+	int rc;
+	unsigned char readBuffer[1024];
+	unsigned char msgBuffer[440];
+	uint8_t sendBuffer[8];
+	int bytesInBuffer = 0;
+	int bytesRead;
+	int bytesSent;
+	uBloxGPS ublox;
+	int bytesAvail;
 
 	// Connect
-	SerialPort m_serial("\\\\.\\COM5");
+	if (m_serial.connect("\\\\.\\COM7") < 0)
+	{
+		std::cout << "Connection Error:  Number " << errno << '\n'; 
+		return;
+	}
 
 	// SEND UBX::MON::VER REQUEST TO VERIFY CONNECTION ON GPS UNIT
 	requestUbxData(m_outBuffer, UBX::MON::classId, UBX::MON::VER::messageId);
-	m_serial.writeSerialPort(m_outBuffer, sizeof(m_outBuffer));
+	// Verify send was successful 
+	if (m_serial.writeSerialPort(m_outBuffer, sizeof(m_outBuffer)) < 0)
+	{
+		std::cerr << "ERROR: Writing Version Request FAILED.\n";
+		return;
+	}
+
+	// first we want to setup the ublox device 
+	if (configureDevice() < 0)
+	{
+		return;
+	}
 
 	while (m_serial.isConnected())
 	{
-		inBytes = m_serial.readSerialPort(m_inBuffer, sizeof(m_inBuffer));
+		// check bytes available
+		if ((bytesAvail = m_serial.bytesAvail()) < 0)
+		{
+			continue;
+		}
 
-		// POLL FOR DATA
-		//	 ^  OR DO WE WANT TO ENABLE DATA STREAM ? 
+		// read bytes from port into buffer
+		if (bytesRead = m_serial.readSerialPort(&readBuffer[bytesInBuffer], sizeof(bytesAvail)) < 0)
+		{
+			continue;
+		}
 
-		// PARSE DATA 
+		// update bytes in bufer
+		bytesInBuffer += bytesRead;
+
+		// d we have at least 2 bytes in buffer (size of sync bytes)
+		if (bytesInBuffer >= NUM_SYNC_BYTES)
+		{
+			int ubxSyncFound = 0;
+			int nmeaFound = 0;
+			int nmeaEnd = 0;
+			int index = 0;
+			int fullMsgLength = 0;
+			int payloadLength = 0;
+			char nmeaSyncChar = '$';
+			int index2 = 0;
+
+			// find the start of message
+			for (index = 0; index <= (bytesInBuffer - NUM_SYNC_BYTES); index++)
+			{
+				// look for sync characters
+				if ((readBuffer[index + 0] == UBX::Header::SyncChar1) &&
+					(readBuffer[index + 1] == UBX::Header::SyncChar2))
+				{
+					ubxSyncFound = 1;
+					ublox.printMessageInHex(readBuffer + index, bytesInBuffer);
+					continue;
+				}
+
+				if (readBuffer[index + 0] == (uint8_t)nmeaSyncChar)
+				{
+					nmeaFound = 1;
+					ublox.printMessageInHex(readBuffer + index, bytesInBuffer);
+
+					for (index2 = index; index2 < bytesInBuffer; index2++)
+					{
+						if ((char)readBuffer[index2] == '\n')
+						{
+							nmeaEnd = index2;
+							break;
+						}
+					}
+
+					if (nmeaEnd != 0) break;
+				}
+			}
+
+			// move start of message to front of buffer
+			if (index > 0)
+			{
+				memmove(&readBuffer, &readBuffer[index], (bytesInBuffer - index));
+				bytesInBuffer -= index;
+			}
+
+			// did we find the start of a message ?
+			if (ubxSyncFound == 0 && nmeaFound == 0)
+			{
+				continue;
+			}
+
+			// did we find a UBX message ? 
+			if (ubxSyncFound == 1)
+			{
+				std::cout << "UBX FOUND:\n";
+				// 8 bytes = (sync1, sync2, class id, msg id, length(2 bytes), checksum A, checksum B)
+				fullMsgLength = combineTwo8bitUIntsTo16bitUInt(readBuffer[4], readBuffer[5]) + 8;
+
+				// do we have enough bytes for the message
+				if (bytesInBuffer < fullMsgLength)
+				{
+					continue;
+				}
+
+				// attempt to validate the ubx checksum
+				if (ublox.validateUbxChecksum(readBuffer, fullMsgLength) < 0)
+				{
+					continue;
+				}
+
+				// consume the ubx message
+				if (bytesInBuffer > fullMsgLength)
+				{
+					// clear the msg buffer 
+					memset(msgBuffer, 0, sizeof(msgBuffer));
+					// move the mem to msg buffer
+					memmove(&msgBuffer[0], &readBuffer[index], msgLength);
+					// move the buffer up.
+					memmove(&readBuffer, &readBuffer[index + msgLength], sizeof(readBuffer - msgLength));
+					// update Bytes in buffer
+					bytesInBuffer -= msgLength;
+				}
+
+				// handle the ubx message 
+				ublox.handleUbxMessage(msgBuffer);
+			}
+			// did we find an nmea message ? 
+			else if (nmeaFound == 1)
+			{
+				// set the length from syncChar to <CR><LF>
+				msgLength = nmeaEnd;
+
+				if (msgLength > 92)
+				{
+					continue;
+				}
+
+				// do we have enough bytes for the nmea message
+				if (bytesInBuffer < msgLength)
+				{
+					continue;
+				}
+
+				// consume the nmea message
+				if (bytesInBuffer > msgLength)
+				{
+					// clear the msg buffer 
+					memset(msgBuffer, 0, sizeof(msgBuffer));
+					// move the mem to msg buffer
+					memmove(&msgBuffer[0], &readBuffer[index], msgLength);
+					// move the buffer up.
+					memmove(&readBuffer, &readBuffer[index + msgLength], sizeof(readBuffer - msgLength));
+					// update Bytes in buffer
+					bytesInBuffer -= msgLength;
+				}
+
+				// handle the nmea message
+				ublox.handleNmeaMessage((char*)msgBuffer);
+			}
+		}
 	}
+}
+
+int uBloxGPS::configureDevice()
+{
+	// turn off NMEA GNGLL - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, NMEA::GxGLL::messageId, 0, 0) < 0)
+	{
+		std::cout << "configureDevice Error: Turning off GNGLL failed\n";
+		return -1;
+	}
+
+	// turn off NMEA GBGSV, GAGSV, GLGSV, GPGSV - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, NMEA::GxGSV::messageId, 0, 0) < 0)
+	{
+		std::cout << "configureDevice Error: Turning off GxGSV failed\n";
+		return -1;
+	}
+
+	// turn off NMEA GNGSA - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, NMEA::GxGSA::messageId, 0, 0) < 0)
+	{
+		std::cout << "configureDevice Error: Turning off GNGSA failed\n";
+		return -1;
+	}
+
+	// turn off NMEA GNGGA - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, NMEA::GxGGA::messageId, 0, 0) < 0)
+	{
+		std::cout << "configureDevice Error: Turning off GNGGA failed\n";
+		return -1;
+	}
+
+	// turn off NMEA GNVTG - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, NMEA::GxVTG::messageId, 0, 0) < 0)
+	{
+		std::cout << "configureDevice Error: Turning off GNVTG failed\n";
+		return -1;
+	}
+
+	// turn off NMEA GNRMC - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, NMEA::GxRMC::messageId, 0, 0) < 0)
+	{
+		std::cout << "configureDevice Error: Turning off GNRMC failed\n";
+		return -1;
+	}
+
+	// turn on UBX NAV DOP - return -1 on error
+	if (configureMessageDataStream(UBX::NAV::classId, UBX::NAV::DOP::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-DOP failed\n";
+		return -1;
+	}
+
+	// turn on UBX NAV PVT - return -1 on error
+	if (configureMessageDataStream(NMEA::classId, UBX::NAV::PVT::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-PVT failed\n";
+		return -1;
+	}
+
+	// turn on UBX NAV POSECEF - return -1 on error
+	if (configureMessageDataStream(UBX::NAV::classId, UBX::NAV::POSECEF::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-POSECEF failed\n";
+		return -1;
+	}
+	
+	// turn on UBX NAV POSLLH - return -1 on error
+	if (configureMessageDataStream(UBX::NAV::classId, UBX::NAV::POSLLH::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-POSLLH failed\n";
+		return -1;
+	}
+	
+	// turn on UBX NAV VELECEF - return -1 on error
+	if (configureMessageDataStream(UBX::NAV::classId, UBX::NAV::VELECEF::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-VELECEF failed\n";
+		return -1;
+	}
+	
+	// turn on UBX NAV VELNED - return -1 on error
+	if (configureMessageDataStream(UBX::NAV::classId, UBX::NAV::VELNED::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-VELNED failed\n";
+		return -1;
+	}
+	
+	// turn on UBX NAV TIMEUTC - return -1 on error
+	if (configureMessageDataStream(UBX::NAV::classId, UBX::NAV::TIMEUTC::messageId, 0, 1) < 0)
+	{
+		std::cout << "configureDevice Error: Turning on UBX-NAV-TIMEUTC failed\n";
+		return -1;
+	}
+
+	// return success
+	return 0;
 }
 
 int uBloxGPS::hexCharToInt(char c)
@@ -66,6 +390,11 @@ int uBloxGPS::hexToInt(char* c)
 
 	// return int
 	return value;
+}
+
+uint16_t uBloxGPS::combineTwo8bitUIntsTo16bitUInt(uint8_t uint1, uint8_t uint2)
+{
+	return (uint1 + (uint2 << 8) + 6);
 }
 
 bool uBloxGPS::validateNmeaChecksum(char* buffer)
@@ -224,9 +553,9 @@ void uBloxGPS::handleNmeaMessage(char* buffer)
 				updateIdOfActiveNavigationSatellites(atoi(field[3 + i]), i);
 
 			}
-			positionDOP = atof(field[8]);										// Position dilution of precision
-			horizontalDOP = atof(field[8]);									// Horizontal dilution of precision
-			verticalDOP = atof(field[8]);										// Vertical dilution of precision
+			positionDOP = (uint16_t)atof(field[8]);								// Position dilution of precision
+			horizontalDOP = (uint16_t)atof(field[8]);							// Horizontal dilution of precision
+			verticalDOP = (uint16_t)atof(field[8]);								// Vertical dilution of precision
 		}
 		// GNSS PSEUDO RANGE ERROR STATS
 		else if (strncmp(&buffer[3], "GST", 3) == 0)
@@ -655,50 +984,46 @@ void uBloxGPS::requestUbxData(uint8_t* buffer, uint8_t classId, uint8_t messageI
 
 	// set check sum bytes
 	setUbxChecksum(buffer);
+
+	// TODO - send data out here 
 }
 
-void uBloxGPS::enableUbxMessageDataStream(uint8_t* buffer, uint8_t classId, uint8_t messageId)
+int uBloxGPS::configureMessageDataStream(uint8_t classId, uint8_t messageId, bool uart1, bool usb)
 {
-	// set sync bytes
-	buffer[0] = UBX::Header::SyncChar1;
+	// create a buffer for sending. 
+	uint8_t buffer[16];
+
+	buffer[0] = UBX::Header::SyncChar1;		// set sync bytes
 	buffer[1] = UBX::Header::SyncChar2;
+	buffer[2] = UBX::CFG::classId;			// set class id byte
+	buffer[3] = UBX::CFG::MSG::messageId;	// set message id byte			
+	buffer[4] = 0x08;						// set message length
+	buffer[5] = 0x00;
+	buffer[6] = classId;				// set desired nmea class id
+	buffer[7] = messageId;				// set desired nmea message id
+	buffer[8] = 0x00;						// set the I2C port off
+	buffer[9] = uart1;						// set the uart port to user specified
+	buffer[10] = 0x00;						// set the uart2 port off
+	buffer[11] = usb;						// set the usb port to user specified
+	buffer[12] = 0x00;						// set the spi port off
+	buffer[13] = 0x00;						// reserved
+	buffer[14] = 0x00;						// checksum byte 1
+	buffer[15] = 0x00;						// checksum byte 2
+	setUbxChecksum(buffer);					// set check sum bytes
 
-	// set class id byte
-	buffer[2] = UBX::CFG::classId ;
+	// write buffer to the ublox device
+	if (m_serial.writeSerialPort(m_outBuffer, sizeof(m_outBuffer)) < 0)
+	{
+		// if error, notify, set errno, and return. 
+		errno = GetLastError();
+		std::cerr << "ERROR: setNmeaMessageDataStream : errno = " << errno << '\n';
+		return -1;
+	}
 
-	// set msg id byte
-	buffer[3] = UBX::CFG::VALSET::messageId;
-
-	// TODO - ADD DATA STRUCTURE
-
-	// set check sum bytes - will be over riden by the setUbxCheckSum function to correctly calculate the checksum.
-	buffer[6] = 0x00;
-	buffer[7] = 0x00;
-
-	// set check sum bytes
-	setUbxChecksum(buffer);
-}
-
-void uBloxGPS::disableUbxMessageDataStream(uint8_t* buffer, uint8_t classId, uint8_t messageId)
-{
-	// set sync bytes
-	buffer[0] = UBX::Header::SyncChar1;
-	buffer[1] = UBX::Header::SyncChar2;
-
-	// set class id byte
-	buffer[2] = UBX::CFG::classId;
-
-	// set msg id byte
-	buffer[3] = UBX::CFG::VALSET::messageId;
-
-	// TODO - ADD DATA STRUCTURE
-
-	// set check sum bytes - will be over riden by the setUbxCheckSum function to correctly calculate the checksum.
-	buffer[6] = 0x00;
-	buffer[7] = 0x00;
-
-	// set check sum bytes
-	setUbxChecksum(buffer);
+	// TODO - Check for acknowledgement message ? 
+	
+	// return sucess
+	return 0;
 }
 
 void uBloxGPS::setUbxMessageRate(uint8_t* buffer, uint8_t satelliteSource, uint8_t measurmentRate, uint8_t navigationRate)
@@ -713,23 +1038,22 @@ void uBloxGPS::setUbxMessageRate(uint8_t* buffer, uint8_t satelliteSource, uint8
 	// set message id byte
 	buffer[3] = UBX::CFG::RATE::messageId;
 
-	// THESE ARE EXPECTED TO BE RECEIVED AS UINT16_T SO WE WILL FINESSE
-		// set message length
-		buffer[4] = 0x06;
-		buffer[5] = 0x00;
+	// set message length
+	buffer[4] = 0x06;
+	buffer[5] = 0x00;
 
-		// set desired measurement rate
-		buffer[6] = measurmentRate;
-		// set second byte based on size of first byte
-		measurmentRate == UBX::CFG::RATE::MEASURE_HZ1 ? buffer[7] = 0x03 : buffer[7] = 0x00;
+	// set desired measurement rate
+	buffer[6] = measurmentRate;
+	// set second byte based on size of first byte
+	measurmentRate == UBX::CFG::RATE::MEASURE_HZ1 ? buffer[7] = 0x03 : buffer[7] = 0x00;
 
-		// desired navigation rate
-		buffer[8] = navigationRate;
-		buffer[9] = 0x00;
+	// desired navigation rate
+	buffer[8] = navigationRate;
+	buffer[9] = 0x00;
 
-		// desired satellite source
-		buffer[10] = satelliteSource;
-		buffer[11] = 0x00;
+	// desired satellite source
+	buffer[10] = satelliteSource;
+	buffer[11] = 0x00;
 
 	// set check sum bytes - will be over riden by the setUbxCheckSum function to correctly calculate the checksum.
 	buffer[12] = 0x00;
@@ -906,7 +1230,6 @@ bool uBloxGPS::getBit(uint32_t data, int element)
 	return masked >> element;
 }
 
-
 #pragma region getters
 
 void uBloxGPS::getUbxChecksums(uint8_t* buffer, int checkSumA, int checkSumB)
@@ -1059,7 +1382,7 @@ void uBloxGPS::printSatelliteData(UBX_SAT_DATA sat)
 void uBloxGPS::printFixData(FixData data)
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tUTC Time           :%.0f \n", data.utcTime);
 	printf("\tlatitudeInDeg           :%4.2f %c\n", data.latitudeInDegrees, data.latitudeDirection);
@@ -1076,7 +1399,7 @@ void uBloxGPS::printFixData(FixData data)
 void uBloxGPS::printAllNmeaData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("GNS FIX DATA:\n");
 	printFixData(gnsFixData);
@@ -1195,7 +1518,7 @@ void uBloxGPS::printAllNmeaData()
 void uBloxGPS::printNavPositionEcefData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tECEF Position X    :%i cm\n", ecefXPositonInCm);
@@ -1207,7 +1530,7 @@ void uBloxGPS::printNavPositionEcefData()
 void uBloxGPS::printNavVelocityEcefData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tECEF Velocity X    :%i cm/s\n", ecefXVelocityInCms);
@@ -1219,7 +1542,7 @@ void uBloxGPS::printNavVelocityEcefData()
 void uBloxGPS::printNavPositionVelocityTimeData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tYear               :%i \n", year);
@@ -1257,7 +1580,7 @@ void uBloxGPS::printNavPositionVelocityTimeData()
 void uBloxGPS::printNavSatelliteData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tNumber Satellites  :%i \n", numberSatellites);
@@ -1275,7 +1598,7 @@ void uBloxGPS::printNavSatelliteData()
 void uBloxGPS::printMonitorVersionData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tSoftware Version   :%s \n", softwareVersion);
 	printf("\tHardware Version   :%s \n", hardwareVersion);
@@ -1285,7 +1608,7 @@ void uBloxGPS::printMonitorVersionData()
 void uBloxGPS::printNavTimeUtcData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tTime Accuracy Est. :%i ns\n", timeAccuraryEstimateInNs);
@@ -1302,7 +1625,7 @@ void uBloxGPS::printNavTimeUtcData()
 void uBloxGPS::printNavStatusData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tGPS Fix Type       :%i \n", timeAccuraryEstimateInNs);
@@ -1316,7 +1639,7 @@ void uBloxGPS::printNavStatusData()
 void uBloxGPS::printNavVelocityNedData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tVelocity North     :%i cm/s\n", velocityNorthInCms);
@@ -1332,7 +1655,7 @@ void uBloxGPS::printNavVelocityNedData()
 void uBloxGPS::printNavDopData()
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tGeometric DOP      :%i \n", geometricDOP);
@@ -1344,10 +1667,32 @@ void uBloxGPS::printNavDopData()
 	printf("\tEasting DOP        :%i \n", eastingDOP);
 }
 
+void uBloxGPS::printNavCovData()
+{
+	// lock 
+	std::lock_guard<std::mutex> lock(m_mutex);
+
+	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
+	printf("\tPos Covariance Valid :%i \n", posCovValid);
+	printf("\tVel Covariance Valid :%i \n", velCovValid);
+	printf("\tPos Covariance NN  :%i \n", posCovNNInMsquared);
+	printf("\tPos Covariance NE  :%i \n", posCovNEInMsquared);
+	printf("\tPos Covariance ND  :%i \n", posCovNDInMsquared);
+	printf("\tPos Covariance EE  :%i \n", posCovEEInMsquared);
+	printf("\tPos Covariance ED  :%i \n", posCovEDInMsquared);
+	printf("\tPos Covariance DD  :%i \n", posCovDDInMsquared);
+	printf("\tVel Covariance NN  :%i \n", velCovNNInMSsquared);
+	printf("\tVel Covariance NE  :%i \n", velCovNEInMSsquared);
+	printf("\tVel Covariance ND  :%i \n", velCovNDInMSsquared);
+	printf("\tVel Covariance EE  :%i \n", velCovEEInMSsquared);
+	printf("\tVel Covariance ED  :%i \n", velCovEDInMSsquared);
+	printf("\tVel Covariance DD  :%i \n", velCovDDInMSsquared);
+}
+
 void uBloxGPS::printNavPositionLlhData()
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	printf("\tGPS Time of Week   :%i ms\n", gpsTimeOfWeekInMilliSecs);
 	printf("\tLongitude          :%i deg\n", longitudeInDeg);
@@ -1400,7 +1745,6 @@ void uBloxGPS::parseAdditionalFlags(uint8_t* flags)
 	// TODO
 }
 
-
 void uBloxGPS::parseMonitorVersionData(uint8_t* buffer)
 {
 	// this message is variable length, 
@@ -1409,7 +1753,7 @@ void uBloxGPS::parseMonitorVersionData(uint8_t* buffer)
 	memcpy(&payloadSize, buffer + 4, sizeof(payloadSize));
 
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&softwareVersion, buffer + 6, sizeof(softwareVersion));
@@ -1420,7 +1764,7 @@ void uBloxGPS::parseMonitorVersionData(uint8_t* buffer)
 void uBloxGPS::parseNavSatelliteData(uint8_t* buffer)
 {
 	// lock 
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1431,29 +1775,33 @@ void uBloxGPS::parseNavSatelliteData(uint8_t* buffer)
 		int satsInMsg = buffer[11];
 		// buffer[12] && buffer[13] = reserved
 
+		int satNum = 0;
+
 		for (int i = 0; i < satsInMsg; i++)
 		{
 			UBX_SAT_DATA temp;
+			
+			satNum = 12 * i;
 
-			memcpy(&temp.gnssId, buffer + (14 + (12 * i)), sizeof(temp.gnssId));
-			memcpy(&temp.satelliteId, buffer + (15 + (12 * i)), sizeof(temp.satelliteId));
-			memcpy(&temp.carrierToNoiseRatioInDbhz, buffer + (16 + (12 * i)), sizeof(temp.carrierToNoiseRatioInDbhz));
-			memcpy(&temp.elevationInDeg, buffer + (17 + (12 * i)), sizeof(temp.elevationInDeg));
-			memcpy(&temp.azimuthInDeg, buffer + (18 + (12 * i)), sizeof(temp.azimuthInDeg));
-			memcpy(&temp.pseudoRangeResidualInM, buffer + (20 + (12 * i)), sizeof(temp.pseudoRangeResidualInM));
-			memcpy(&temp.flags, buffer + (22 + (12 * i)), sizeof(temp.flags));
+			memcpy(&temp.gnssId, &buffer[14+satNum], sizeof(temp.gnssId));
+			memcpy(&temp.satelliteId, &buffer[15 + satNum], sizeof(temp.satelliteId));
+			memcpy(&temp.carrierToNoiseRatioInDbhz, &buffer[16 + satNum], sizeof(temp.carrierToNoiseRatioInDbhz));
+			memcpy(&temp.elevationInDeg, &buffer[17 + satNum], sizeof(temp.elevationInDeg));
+			memcpy(&temp.azimuthInDeg, &buffer[18 + satNum], sizeof(temp.azimuthInDeg));
+			memcpy(&temp.pseudoRangeResidualInM, &buffer[20 + satNum], sizeof(temp.pseudoRangeResidualInM));
+			memcpy(&temp.flags, &buffer[22 + satNum], sizeof(temp.flags));
 
 			updateSatelliteVector(temp, satellites);
 		}
 
-		numberSatellites = satellites.size();
+		numberSatellites = (uint8_t)satellites.size();
 	}
 }
 
 void uBloxGPS::parseNavPositionVelocityTimeData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1489,20 +1837,20 @@ void uBloxGPS::parseNavPositionVelocityTimeData(uint8_t* buffer)
 	memcpy(&magneticDeclinationAccuracyInDeg, buffer + 96, sizeof(magneticDeclinationAccuracyInDeg));
 
 	// adjust for scaling
-	longitudeInDeg = longitudeInDeg * 1e-7;
-	latitudeInDeg = latitudeInDeg * 1e-7;
-	headingOfMotionInDeg = headingOfMotionInDeg * 1e-5;
-	headingAccuracyEstimateInDeg = headingAccuracyEstimateInDeg * 1e-5;
-	positionDOP = positionDOP * 0.01;
-	headingOfVehicleInDeg = headingOfVehicleInDeg * 1e-5;
-	magneticDeclinationInDeg = magneticDeclinationInDeg * 1e-2;
-	magneticDeclinationAccuracyInDeg = magneticDeclinationAccuracyInDeg * 1e-2;
+	longitudeInDeg = static_cast<int32_t>(longitudeInDeg * 1e-7);
+	latitudeInDeg = static_cast<int32_t>(latitudeInDeg * 1e-7);
+	headingOfMotionInDeg = static_cast<int32_t>(headingOfMotionInDeg * 1e-5);
+	headingAccuracyEstimateInDeg = static_cast<uint32_t>(headingAccuracyEstimateInDeg * 1e-5);
+	positionDOP = static_cast<uint16_t>(positionDOP * 0.01);
+	headingOfVehicleInDeg = static_cast<int32_t>(headingOfVehicleInDeg * 1e-5);
+	magneticDeclinationInDeg = static_cast<int16_t>(magneticDeclinationInDeg * 1e-2);
+	magneticDeclinationAccuracyInDeg = static_cast<uint16_t>(magneticDeclinationAccuracyInDeg * 1e-2);
 }
 
 void uBloxGPS::parseNavStatusData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1517,7 +1865,7 @@ void uBloxGPS::parseNavStatusData(uint8_t* buffer)
 void uBloxGPS::parseNavPositionEcefData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1530,7 +1878,7 @@ void uBloxGPS::parseNavPositionEcefData(uint8_t* buffer)
 void uBloxGPS::parseNavPositionLlhData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1542,14 +1890,14 @@ void uBloxGPS::parseNavPositionLlhData(uint8_t* buffer)
 	memcpy(&verticalAccuracyEstimateInMm, buffer + 30, sizeof(verticalAccuracyEstimateInMm));
 
 	// adjust for scaling
-	longitudeInDeg = longitudeInDeg * 1e-7;
-	latitudeInDeg = latitudeInDeg * 1e-7;
+	longitudeInDeg = static_cast<int32_t>(longitudeInDeg * 1e-7);
+	latitudeInDeg = static_cast<int32_t>(latitudeInDeg * 1e-7);
 }
 
 void uBloxGPS::parseNavVelocityEcefData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1562,7 +1910,7 @@ void uBloxGPS::parseNavVelocityEcefData(uint8_t* buffer)
 void uBloxGPS::parseNavVelocityNedData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1576,14 +1924,14 @@ void uBloxGPS::parseNavVelocityNedData(uint8_t* buffer)
 	memcpy(&headingAccuracyEstimateInDeg, buffer + 38, sizeof(headingAccuracyEstimateInDeg));
 
 	// adjust for scaling. 
-	headingOfMotionInDeg = headingOfMotionInDeg * 1e-5;
-	headingAccuracyEstimateInDeg = headingAccuracyEstimateInDeg * 1e-5;
+	headingOfMotionInDeg = static_cast<int32_t>(headingOfMotionInDeg * 1e-5);
+	headingAccuracyEstimateInDeg = static_cast<uint32_t>(headingAccuracyEstimateInDeg * 1e-5);
 }
 
 void uBloxGPS::parseNavTimeUtcData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1601,7 +1949,7 @@ void uBloxGPS::parseNavTimeUtcData(uint8_t* buffer)
 void uBloxGPS::parseNavDopData(uint8_t* buffer)
 {
 	// lock
-	std::unique_lock<std::mutex> lock(m_mutex);
+	std::lock_guard<std::mutex> lock(m_mutex);
 
 	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
 	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
@@ -1614,15 +1962,42 @@ void uBloxGPS::parseNavDopData(uint8_t* buffer)
 	memcpy(&eastingDOP, buffer + 22, sizeof(eastingDOP));
 
 	// adjust for scaling. 
-	geometricDOP = geometricDOP * 0.01;
-	positionDOP = positionDOP * 0.01;
-	timeDOP = timeDOP * 0.01;
-	verticalDOP = verticalDOP * 0.01;
-	horizontalDOP = horizontalDOP * 0.01;
-	northingDOP = northingDOP * 0.01;
-	eastingDOP = eastingDOP * 0.01;
+	int16_t scaling = (int16_t)0.01;
+	geometricDOP = geometricDOP * scaling;
+	positionDOP = positionDOP * scaling;
+	timeDOP = timeDOP * scaling;
+	verticalDOP = verticalDOP * scaling;
+	horizontalDOP = horizontalDOP * scaling;
+	northingDOP = northingDOP * scaling;
+	eastingDOP = eastingDOP * scaling;
 }
 
+void uBloxGPS::parseNavCovData(uint8_t* buffer)
+{
+	// TODO - convert covariance data from Little Endian to decimal format.
+
+	// lock
+	std::lock_guard<std::mutex> lock(m_mutex);
+
+	// Start at Buffer+6 (sync bytes, ids, payload length are in first 6 bytes)
+	memcpy(&gpsTimeOfWeekInMilliSecs, buffer + 6, sizeof(gpsTimeOfWeekInMilliSecs));
+	// [10] is msg version - not needed
+	memcpy(&posCovValid, buffer + 11, sizeof(posCovValid));
+	memcpy(&velCovValid, buffer + 12, sizeof(velCovValid));
+	// [12]-[21] are reserved
+	memcpy(&posCovNNInMsquared, buffer + 22, sizeof(posCovNNInMsquared));
+	memcpy(&posCovNEInMsquared, buffer + 26, sizeof(posCovNEInMsquared));
+	memcpy(&posCovNDInMsquared, buffer + 30, sizeof(posCovNDInMsquared));
+	memcpy(&posCovEEInMsquared, buffer + 34, sizeof(posCovEEInMsquared));
+	memcpy(&posCovEDInMsquared, buffer + 38, sizeof(posCovEDInMsquared));
+	memcpy(&posCovDDInMsquared, buffer + 42, sizeof(posCovDDInMsquared));
+	memcpy(&velCovNNInMSsquared, buffer + 46, sizeof(velCovNNInMSsquared));
+	memcpy(&velCovNEInMSsquared, buffer + 50, sizeof(velCovNEInMSsquared));
+	memcpy(&velCovNDInMSsquared, buffer + 54, sizeof(velCovNDInMSsquared));
+	memcpy(&velCovEEInMSsquared, buffer + 58, sizeof(velCovEEInMSsquared));
+	memcpy(&velCovEDInMSsquared, buffer + 62, sizeof(velCovEDInMSsquared));
+	memcpy(&velCovDDInMSsquared, buffer + 66, sizeof(velCovDDInMSsquared));
+}
 
 #pragma endregion
 

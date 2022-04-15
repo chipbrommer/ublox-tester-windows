@@ -47,6 +47,7 @@ struct UBX::CFG
 {
 	struct RATE;
 	struct VALSET;
+	struct MSG;
 
 	static const uint8_t classId = 0x06;
 };
@@ -77,6 +78,11 @@ struct UBX::CFG::VALSET
 	static const uint8_t messageId = 0x8A;
 };
 
+struct UBX::CFG::MSG
+{
+	static const uint8_t messageId = 0x01;
+};
+
 //! @brief UBX MON class id and messages
 struct UBX::MON
 {
@@ -94,6 +100,7 @@ struct UBX::MON::VER
 //! @brief UBX NAV class id and messages
 struct UBX::NAV
 {
+	struct COV;
 	struct DOP;
 	struct SAT;
 	struct STATUS;
@@ -105,6 +112,14 @@ struct UBX::NAV
 	struct TIMEUTC;
 
 	static const uint8_t classId = 0x01;
+};
+
+//! @brief holds UBX NAV COV message id, payload length, and full message length
+struct UBX::NAV::COV
+{
+	static const uint8_t messageId = 0x36;
+	static const int payloadLength = 64;
+	static const int fullMessageLength = 72;
 };
 
 //! @brief holds UBX NAV DOP message id, payload length, and full message length
@@ -226,6 +241,28 @@ struct UBX_MON_VER
 	char softwareVersion[30] = { 0 };
 	char hardwareVersion[10] = { 0 };
 	std::string extendedVersionData = { 0 };
+};
+
+//! @brief Holds UBX NAV Covariance data - NOTE: THIS DATA COMES ACROSS AS LITTLE ENDIAN
+struct UBX_NAV_COV
+{
+	uint32_t gpsTimeOfWeekInMilliSecs = 0;
+	uint8_t messageVersion = 0;
+	uint8_t positionCovValid = 0;
+	uint8_t velocityCovValid = 0;
+	uint16_t reserved = 0;
+	uint16_t positionCovNN = 0;
+	uint16_t positionCovNE = 0;
+	uint16_t positionCovND = 0;
+	uint16_t positionCovEE = 0;
+	uint16_t positionCovED = 0;
+	uint16_t positionCovDD = 0;
+	uint16_t velocityCovNN = 0;
+	uint16_t velocityCovNE = 0;
+	uint16_t velocityCovND = 0;
+	uint16_t velocityCovEE = 0;
+	uint16_t velocityCovED = 0;
+	uint16_t velocityCovDD = 0;
 };
 
 //! @brief Holds UBX NAV Dilution of precision data
@@ -362,6 +399,48 @@ struct UBX_NAV_TIMEUTC
 /*	
 *	NMEA DATA & MESSAGE STRUCTURES
 */
+
+struct NMEA
+{
+	static const uint8_t classId = 0xF0;
+
+	struct GxGSV;
+	struct GxGLL;
+	struct GxGSA;
+	struct GxGGA;
+	struct GxVTG;
+	struct GxRMC;
+};
+
+struct NMEA::GxGGA
+{
+	static const uint8_t messageId = 0x00;
+};
+
+struct NMEA::GxGLL
+{
+	static const uint8_t messageId = 0x01;
+};
+
+struct NMEA::GxGSA
+{
+	static const uint8_t messageId = 0x02;
+};
+
+struct NMEA::GxGSV
+{
+	static const uint8_t messageId = 0x03;
+};
+
+struct NMEA::GxRMC
+{
+	static const uint8_t messageId = 0x04;
+};
+
+struct NMEA::GxVTG
+{
+	static const uint8_t messageId = 0x05;
+};
 
 //! @brief Holds Satellite data with necessary data elements. 
 struct Satellite
